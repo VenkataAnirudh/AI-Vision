@@ -32,8 +32,8 @@ drive.mount('/content/drive')
 # =========================
 # 2. Install Dependencies
 # =========================
-# (Uncomment if needed)
-!pip install torch torchvision opencv-python pyyaml
+# (Uncomment and run these lines manually in a Colab cell if needed)
+# !pip install torch torchvision opencv-python pyyaml
 
 # =========================
 # 3. Clone/Copy Your Codebase
@@ -59,7 +59,13 @@ if not os.path.exists("IndoorActionDataset-video"):
 # =========================
 # 5. Run Training Script
 # =========================
-!python scripts/train_indoor_action.py --epochs {EPOCHS} --batch_size {BATCH_SIZE} --lr {LEARNING_RATE}
+import subprocess
+subprocess.run([
+    "python", "scripts/train_indoor_action.py",
+    "--epochs", str(EPOCHS),
+    "--batch_size", str(BATCH_SIZE),
+    "--lr", str(LEARNING_RATE)
+])
 
 # =========================
 # 6. Save Trained Weights to Drive
