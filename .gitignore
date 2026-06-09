@@ -1,0 +1,13 @@
+venv/
+.venv/
+__pycache__/
+.env
+.aider*
+*.pyc
+
+outputs/
+output/
+clips/
+logs/
+temp/
+cache/
