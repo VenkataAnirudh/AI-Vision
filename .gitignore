@@ -11,3 +11,14 @@ clips/
 logs/
 temp/
 cache/
+
+IndoorActionDataset/
+IndoorActionDataset-video/
+
+models/
+
+*.pt
+
+config.yaml
+run.bat
+requirements.txt
