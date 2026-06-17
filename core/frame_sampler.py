@@ -10,7 +10,7 @@ class FrameSampler:
         self.static_threshold = self.config['static_threshold']
         self.high_motion_threshold = self.config['high_motion_threshold']
         
-        # Temporal clip parameters
+        
         self.clip_fps = self.config['temporal']['clip_fps']
         self.clip_duration = self.config['temporal']['clip_duration_seconds']
         self.motion_trigger_threshold = self.config['temporal']['motion_trigger_threshold']
@@ -40,17 +40,20 @@ class FrameSampler:
         frame_idx = 0
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         
-        # We pre-read frames if we need to extract a clip
-        # R3D-18 clip requires 16 frames. 16 frames at 12 FPS is ~1.3 seconds.
-        # Spacing: native_fps / clip_fps. E.g., 30 / 12 = 2.5 frames.
+        
+        
+        
         frame_spacing = max(1, int(round(native_fps / self.clip_fps)))
 
-        # Cache frames to allow backward/forward extraction for clips
-        # We can buffer the last few frames to construct a clip or read forward.
-        # Since we are reading sequentially, we can read ahead when a trigger occurs.
-        # We keep a sliding window of recent BGR frames
-        frame_buffer = []
-        max_buffer_size = int(native_fps * 2) # 2 seconds buffer
+        
+        
+        
+        
+        from collections import deque
+        max_buffer_size = max(100, int(native_fps * 3)) 
+        frame_buffer = deque(maxlen=max_buffer_size)
+
+        pending_clip_trigger = None
 
         while cap.isOpened():
             ret, frame = cap.read()
@@ -59,31 +62,31 @@ class FrameSampler:
 
             timestamp = frame_idx / native_fps
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            gray_resized = cv2.resize(gray, (160, 120)) # Resize for fast diff computation
+            gray_resized = cv2.resize(gray, (160, 120)) 
 
-            # Keep sliding BGR frame buffer
+            
             frame_buffer.append((timestamp, frame.copy()))
-            if len(frame_buffer) > max_buffer_size:
-                frame_buffer.pop(0)
 
-            # Calculate motion score
+            
             if prev_gray is not None:
                 diff = cv2.absdiff(gray_resized, prev_gray)
-                motion_score = float(diff.mean())
+                
+                k = max(1, int(diff.size * 0.05))
+                motion_score = float(np.partition(diff.flatten(), -k)[-k:].mean())
             else:
                 motion_score = 0.0
 
             prev_gray = gray_resized
 
-            # Determine adaptive target FPS
+            
             if motion_score < self.static_threshold:
-                target_fps = self.static_fps
+                target_fps = max(3.0, self.static_fps) 
             elif motion_score > self.high_motion_threshold:
                 target_fps = self.high_motion_fps
             else:
-                target_fps = self.base_fps
+                target_fps = max(3.0, self.base_fps)
 
-            # Check if we should sample this frame
+            
             sample_interval = 1.0 / target_fps
             if timestamp - last_sampled_time >= sample_interval:
                 sampled_frames.append({
@@ -94,43 +97,44 @@ class FrameSampler:
                 })
                 last_sampled_time = timestamp
 
-            # Check if we should trigger an action clip (R3D-18)
+            
             if motion_score >= self.motion_trigger_threshold:
                 if timestamp - last_clip_time >= self.min_clip_gap:
-                    # Extract 16 frames. We can look forward or look backward/forward.
-                    # Let's read 16 frames from cap or buffer.
-                    # Spacing is frame_spacing (e.g. 2). 16 frames at spacing 2 is 32 native frames.
-                    # Let's collect 16 frames starting from the buffer or read ahead.
-                    clip_frames = []
-                    
-                    # Store current position to restore it
-                    curr_pos = cap.get(cv2.CAP_PROP_POS_FRAMES)
-                    
-                    # Read 16 frames spaced by frame_spacing
-                    clip_success = True
-                    clip_idx = frame_idx
-                    for _ in range(16):
-                        cap.set(cv2.CAP_PROP_POS_FRAMES, clip_idx)
-                        r_ret, r_frame = cap.read()
-                        if r_ret:
-                            clip_frames.append(r_frame.copy())
-                        else:
-                            clip_success = False
-                            break
-                        clip_idx += frame_spacing
-                    
-                    # Restore original capture position
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, curr_pos)
-                    
-                    if clip_success and len(clip_frames) == 16:
-                        motion_clips.append({
-                            'timestamp': timestamp,
-                            'frames': clip_frames
-                        })
+                    if pending_clip_trigger is None:
+                        pending_clip_trigger = timestamp
                         last_clip_time = timestamp
-                        print(f"[FrameSampler] Motion Clip triggered at {timestamp:.2f}s (motion_score: {motion_score:.2f})")
+                        print(f"[FrameSampler] Motion Clip triggered at {timestamp:.2f}s (motion_score: {motion_score:.2f}) - buffering...")
+
+            
+            if pending_clip_trigger is not None:
+                frames_needed_after = 8 * frame_spacing
+                time_needed_after = frames_needed_after / native_fps
+                
+                if timestamp >= pending_clip_trigger + time_needed_after:
+                    total_span = 16 * frame_spacing
+                    if len(frame_buffer) >= total_span:
+                        clip_frames = [f for (_, f) in list(frame_buffer)[-total_span::frame_spacing]][:16]
+                        if len(clip_frames) == 16:
+                            motion_clips.append({
+                                'timestamp': pending_clip_trigger,
+                                'frames': clip_frames
+                            })
+                            print(f"[FrameSampler] Motion Clip extracted around {pending_clip_trigger:.2f}s")
+                    pending_clip_trigger = None
 
             frame_idx += 1
+
+        
+        if pending_clip_trigger is not None:
+            total_span = 16 * frame_spacing
+            available_frames = [f for (_, f) in list(frame_buffer)[-total_span::frame_spacing]]
+            while len(available_frames) < 16 and len(available_frames) > 0:
+                available_frames.append(available_frames[-1])
+            if len(available_frames) == 16:
+                motion_clips.append({
+                    'timestamp': pending_clip_trigger,
+                    'frames': available_frames
+                })
 
         cap.release()
         print(f"[FrameSampler] Adaptive extraction complete. Sampled {len(sampled_frames)} frames, extracted {len(motion_clips)} motion clips.")

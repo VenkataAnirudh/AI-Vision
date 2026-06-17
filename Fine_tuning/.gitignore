@@ -1,0 +1,38 @@
+# Keep notebooks, DATASETS.txt, README.txt - ignore everything heavy.
+
+# Working dirs (skeleton/log-mel caches + trained checkpoints)
+*/_work/
+**/skeleton_cache/
+**/logmel_cache/
+
+# Downloaded datasets (per model folder)
+01_violence_stgcn/RLVS/
+01_violence_stgcn/home_negatives/
+01_violence_stgcn/RWF-2000/
+02_home_action_stgcn/IndoorActionDataset-video/
+02_home_action_stgcn/home_action_extra/
+03_weapon_yolo/train/
+03_weapon_yolo/valid/
+03_weapon_yolo/test/
+03_weapon_yolo/data.yaml
+03_weapon_yolo/home_negatives_frames/
+04_emotion_fer/fer2013/
+05_audio_events/ESC-50/
+05_audio_events/donateacry-corpus/
+05_audio_events/scream/
+
+# Archives + media + weights (belt and suspenders)
+*.zip
+*.tar
+*.tar.gz
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+*.wav
+*.ogg
+*.flac
+*.mp3
+*.pt
+*.npy

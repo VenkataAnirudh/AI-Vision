@@ -1,0 +1,29 @@
+==============================================================
+ 04 - EMOTION (FER, MobileNetV3)   ->   emotion_fer_best.pt
+==============================================================
+7-class facial emotion classifier (replaces DeepFace). Stress is
+DERIVED from the emotion probabilities (mapping saved in the ckpt),
+so no separate stress model. Download INTO this folder, then upload
+the whole Fine_tuning folder to MyDrive/VisionAI/.
+
+7 classes:  angry, disgust, fear, happy, neutral, sad, surprise
+
+ONE-TIME (Kaggle CLI):
+  pip install kaggle
+  mkdir "$env:USERPROFILE\.kaggle" -Force
+  Copy-Item "D:\Coding\Vision AI\AnamolyD\kaggle.json" "$env:USERPROFILE\.kaggle\kaggle.json" -Force
+
+--------------------------------------------------------------
+1) FER-2013  (PRIMARY - 35,887 face crops)
+--------------------------------------------------------------
+  kaggle datasets download -d msambare/fer2013 -p "D:\Coding\Vision AI\Fine_tuning\04_emotion_fer\fer2013" --unzip
+
+  Final layout (ships train/ and test/ already):
+    04_emotion_fer\fer2013\train\<emotion>\*.jpg
+    04_emotion_fer\fer2013\test\<emotion>\*.jpg
+
+NOTES
+- For +accuracy: set MODEL_NAME="efficientnet_b0" in CONFIG (still 4GB-OK),
+  or add RAF-DB / AffectNet face crops into the same train\<emotion>\ folders.
+- Stress = weighted sum of negative emotions (fear/angry/sad/disgust); the
+  weights live in the checkpoint so app + training stay in sync.

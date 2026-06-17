@@ -1,0 +1,303 @@
+VISION AI FINE-TUNING SUITE: TECHNICAL ARCHITECTURAL SPECIFICATION & END-TO-END WORKFLOW
+=====================================================================================
+
+1. EXECUTIVE SUMMARY & ARCHITECTURAL MOTIVATION
+------------------------------------------------
+The Vision AI pipeline processes live video feeds using a multi-modal, stage-by-stage architecture. Initially, the system relied on pre-trained models or hand-tuned heuristics that suffered from high false alarm rates and background bias.
+
+To address these vulnerabilities, this Fine-Tuning Suite provides a structured, resource-optimized framework to retrain and replace five key detectors:
+1. Violence Detection: ST-GCN replaces VideoMAE & the "aggressive_guard" heuristic.
+2. Home Action Detection: ST-GCN replaces the dual-head R3D model.
+3. Weapon Detection: YOLO11n replaces the domain-biased pre-trained weapon model.
+4. Facial Emotion Recognition: EfficientNet-B0/MobileNetV3 replaces the DeepFace emotion engine and brow/eye aspect ratio heuristics.
+5. Audio Event Detection: Log-Mel CNN replaces the DSP pitch/RMS loudness rules.
+
+### Resource & Deployment Constraints
+The pipeline is designed around a dual-hardware profile:
+* TRAINING: Optimized for Google Colab (free T4 GPU, 16 GB VRAM, 12 GB RAM) with a strict runtime duration of approximately 4 hours per notebook. To satisfy this constraint, preprocessing steps (skeleton extraction and spectrogram generation) are pre-computed, cached, and stored in resume-safe directories on Google Drive.
+* INFERENCE: Deployed locally on a 4 GB NVIDIA GTX 1650 Ti. All fine-tuned models are lightweight (e.g., YOLO11n, EfficientNet-B0, low-channel CNNs, and skeletal graph convolutions) to run concurrently in real-time.
+
+---
+
+2. DOMAIN 01: VIOLENCE DETECTION (SKELETAL ST-GCN)
+--------------------------------------------------
+* Target File Name: `violence_stgcn_best.pt`
+* Purpose: Binary violence / non-violence classifier.
+* Replaces: VideoMAE model and the aggressive_guard heuristic.
+
+### 2.1 Datasets & Data Types
+1. Real Life Violence Situations (RLVS) (Primary): Comprises 2,000 video clips (1,000 violence, 1,000 non-violence) in `.mp4` format.
+2. Benign Home Negatives (Critical): User-provided videos of normal home activities (e.g., cooking, cleaning, hugging, exercising, sports on TV, kids roughhousing, walking). All are explicitly labeled as non-violence (`0`). This dataset is the primary mechanism for preventing false alerts.
+3. RWF-2000 (Optional): CCTV footage database of 2,000 clips (1,000 fight, 1,000 non-fight).
+
+### 2.2 Preprocessing & Feature Extraction
+To eliminate background bias (e.g., matching a living room to a positive event because of training bias), videos are converted into background-invariant skeletal tracks:
+1. Frame Sampling: Videos are downsampled or interpolated to exactly `CLIP_LEN = 32` frames. If a video is shorter, the last frame is padded; if longer, frames are sampled uniformly using linear spacing.
+2. Pose Estimation: Frames are processed using `yolo11s-pose` (confidence threshold 0.30) to extract the 17-point COCO human keypoint coordinates.
+3. Multi-Person Tracking: A maximum of `MAX_PERSONS = 2` subjects are tracked per frame. If more than 2 people are detected, the subjects are sorted by mean keypoint confidence, keeping the top 2.
+4. Image Normalization: Bounding box coordinates are normalized to the `[-1, 1]` range:
+     x_norm = (x / frame_width - 0.5) * 2.0
+     y_norm = (y / frame_height - 0.5) * 2.0
+   This normalization retains the scale-invariant spatial relationship and distance between subjects, which acts as a primary violence cue.
+5. Caching: Skeletons are saved as `.npy` cache files of shape `[CLIP_LEN, MAX_PERSONS, 17, 3]` (where 3 represents `x, y, confidence`).
+
+### 2.3 Network Architecture (`STGCN`)
+The Spatial-Temporal Graph Convolutional Network models human movements by treating joint keypoints as nodes and skeletal connections as edges:
+1. Graph Topology: Built using the 17 COCO edges (e.g., shoulders to elbows, hips to knees) represented as an adjacency matrix `A` of shape `[17, 17]`. Adjacency is normalized using degree matrix inversion: D_inv @ A.
+2. Edge Importance Mask: A learnable parameter `edge_imp` of shape `[17, 17]` is initialized to 1.0. During training, the GCN multiplies the normalized adjacency matrix by this mask, allowing the network to adjust weightings for specific skeletal connections (e.g., fast hand movement vs. ankle movement).
+3. ST-GCN Blocks: The model consists of 6 stacked Blocks (channel sizes: 3 -> 64 -> 64 -> 128 -> 128 -> 256 -> 256). Each block contains:
+   * Spatial GCN: Implemented as `nn.Conv2d(cin, cout, 1)` followed by a matrix multiplication of the adjacency matrix and the learnable edge importance mask:
+       x_gcn = torch.einsum("nctv,vw->nctw", x_gcn, A * edge_imp)
+   * Temporal GCN: A sequence of Batch Normalization, ReLU activation, a 2D convolution over the temporal axis `nn.Conv2d(cout, cout, (9, 1), (stride, 1), (4, 0))`, and another Batch Normalization.
+   * Residual Connection: If channels change or stride is greater than 1, a `nn.Conv2d` layer shifts input dimensions; otherwise, it behaves as a direct identity connection.
+4. Output Head: Spatial-temporal outputs are average-pooled across joints and time, and then average-pooled across the two tracked subjects. A linear layer (`nn.Linear(256, 2)`) outputs logits for binary classification.
+
+### 2.4 Training Pipeline
+1. Stratified Pooling: All cached skeletons are pooled. A stratified 75/25 split partitions the data into a training/validation pool and a held-out test split.
+2. Cross-Validation: Trains using 5-Fold Stratified Cross-Validation on the 75% pool.
+3. Loss Function: Weighted Cross-Entropy Loss. Class weights are computed as the inverse frequency of the classes:
+     cls_w = 1.0 / class_counts
+4. Hyperparameters:
+   * Batch Size: 64
+   * Max Epochs: 60 (with early stopping patience of 8 epochs based on validation loss)
+   * Optimizer: AdamW (lr=1e-3, weight_decay=1e-4)
+   * LR Scheduler: Cosine Annealing (decaying down to 1e-6)
+   * Mixed Precision (AMP): Enabled if CUDA is available.
+5. Evaluation: Generates predictions on the 25% held-out test set to calculate precision, recall, and F1-score.
+
+---
+
+3. DOMAIN 02: HOME ACTION RECOGNITION (SKELETAL ST-GCN)
+------------------------------------------------------
+* Target File Name: `home_action_stgcn_best.pt` (or `home_action_stgcn_best_macrof1.pt`)
+* Purpose: Multi-class action classifier (up to 10 classes).
+* Replaces: Dual-head R3D model.
+
+### 3.1 Datasets & Classes
+1. IndoorActionDataset (Primary): Video database organized into train/validation/test folders.
+2. Home Action Extra (Recommended): UP-Fall (Kaggle), URFD, and Le2i fall detection datasets.
+3. Target Classes (10 canonical classes):
+   * Alert Classes: `falling_down`, `lying_on_the_floor` (trigger security/medical alerts).
+   * Contextual Classes: `sitting_down`, `standing_up`, `walking`, `watching_tv`, `no_action`, `cleaning`, `eating`, `blowing_nose_or_sneezing`.
+
+### 3.2 Preprocessing, Augmentation & Architecture
+1. Skeleton Extraction: Uses `yolo11s-pose` at confidence 0.30 to sample keypoints to `CLIP_LEN = 32`.
+2. Subject Isolation: Unlike violence detection, actions are classified per subject (`MAX_PERSONS = 1`). In multi-person frames, skeletons are processed individually, allowing independent action labels.
+3. Augmentations:
+   * Random horizontal flips: Coordinates along the X-axis are inverted: `x[..., 0] *= -1.0` (with 50% probability).
+   * Coordinate Noise: Adds normal noise with standard deviation 0.01 to the coordinates.
+   * Scale Jittering: Coordinates are scaled by a factor chosen uniformly from `[0.9, 1.1]`.
+4. Architecture: Uses the same 6-block ST-GCN network as the violence model, but adds a dropout layer (`nn.Dropout(0.3)`) before the final linear layer (`nn.Linear(256, num_classes)`) to prevent overfitting.
+
+### 3.3 Training Pipelines
+This domain supports two separate selection algorithms:
+
+#### A. Standard Pipeline (Validation Loss Selector)
+* Stratification: Pools all data, splits 75/25 (train/val vs. test).
+* Validation: Run 5-Fold Stratified Cross-Validation on the 75% pool.
+* Loss: Cross-Entropy Loss with class weights and label smoothing of 0.05.
+* Training: AdamW, Cosine Annealing, Max Epochs = 80, Early Stopping patience = 10 epochs (based on lowest validation loss). Saves to `home_action_stgcn_best.pt`.
+
+#### B. Macro-F1 Add-on Pipeline (`home_action_macrof1_cells.py`)
+Because critical action classes (like falls) are underrepresented compared to daily activities (like sitting or walking), validation loss might favor the dominant classes.
+* Mechanism: The add-on pipeline evaluates checkpoints using Macro-F1 score (unweighted mean of F1-scores across all classes).
+* Metric selection check:
+    mf1 = f1_score(y_true, y_pred, average="macro", zero_division=0)
+  If the Macro-F1 score improves, or if it matches the best score but validation loss is lower, the checkpoint is saved.
+* Output: Saved separately to `home_action_stgcn_best_macrof1.pt`.
+
+---
+
+4. DOMAIN 03: WEAPON DETECTION (YOLO11n)
+----------------------------------------
+* Target File Name: `weapon_yolo11n_best.pt`
+* Purpose: Object bounding-box detector for firearms and knives.
+* Replaces: Pre-trained generic weapon YOLO models.
+
+### 4.1 Datasets & Class Contrast Strategy
+Standard weapon detectors false-alarm on everyday household objects (e.g., mistaking a smartphone or television remote for a firearm). To mitigate this, this pipeline uses a contrast-class training strategy:
+1. Sohas Weapon Dataset (Primary): Features annotated images containing firearms and knives, but also explicitly labels **lookalike classes** (smartphone, wallet, banknote, card). Training the model to detect these lookalikes teaches it to differentiate them from actual weapons.
+2. Home Negative Frames (Optional): Still images of the home environment (e.g., people holding phones, remotes, or wallets) containing NO labels. In the YOLO formatting structure, images with empty label files are treated as background images. This forces the network to learn background textures, suppressing false alarms.
+
+### 4.2 Training Pipeline
+1. Dataset Staging: Because object detection requires reading thousands of high-resolution images, files are copied from Google Drive to the local Colab SSD (`/content/weapon_ds`) before training starts.
+2. Path Normalization: The training script parses `data.yaml` and rewrites relative paths into absolute paths pointing to the local SSD cache.
+3. Image Size: Default resolution is set to `IMGSZ = 640`.
+4. Stratified K-Fold CV: A 3-fold cross-validation is performed. Since images can contain multiple bounding boxes, the training script computes the dominant class (most frequent annotated class) for each image to stratify splits evenly. Background images are assigned to class index `NC`.
+5. Hyperparameters:
+   * Epochs: 80
+   * Batch Size: Set to `-1` (enables YOLO auto-batching to utilize ~60% of available GPU VRAM).
+   * Patience: 20 epochs
+   * Optimizer: Auto-selected (AdamW/SGD) with Cosine learning rate scheduling.
+   * Augmentations: HSV color jittering (hsv_h=0.015, hsv_s=0.7, hsv_v=0.4), horizontal flips (50%), and Mosaic augmentation (mosaic=1.0).
+6. Export: Checkpoints are validated on the validation split. The fold that achieves the highest `mAP50-95` is copied to Google Drive as `weapon_yolo11n_best.pt`.
+
+---
+
+5. DOMAIN 04: FACIAL EMOTION RECOGNITION (CNN)
+-----------------------------------------------
+* Target File Name: `emotion_fer_best.pt`
+* Purpose: 7-class facial emotion classifier and continuous stress index estimator.
+* Replaces: DeepFace facial analysis stage and Eye Aspect Ratio (EAR)/brow-narrowing heuristics.
+
+### 5.1 Datasets & Preprocessing
+1. FER-2013: Contains 35,887 grayscale face crops (48x48 pixels) categorized into 7 classes: `angry`, `disgust`, `fear`, `happy`, `neutral`, `sad`, `surprise`.
+2. Preprocessing:
+   * Faces are upscaled to `IMG_SIZE = 160`.
+   * Grayscale single-channel matrices are replicated to 3 channels to match ImageNet-pretrained model requirements.
+   * Image normalization uses ImageNet channel mean `[0.485, 0.456, 0.406]` and standard deviation `[0.229, 0.224, 0.225]`.
+3. Augmentations: Random horizontal flips, random rotations up to 12 degrees, and random affine transformations (translation up to 6%, scale adjustments between 0.92 and 1.08).
+
+### 5.2 Network Architecture
+Uses a pre-trained backbone from the `timm` library:
+* Recommended model: `efficientnet_b0` (5.3M parameters).
+* Fallback model: `mobilenetv3_large_100` (MobileNetV3).
+The model is loaded with ImageNet weights and modified to output logits for 7 classes.
+
+### 5.3 Stress Index Calculation
+Instead of using a separate neural network for stress classification, the continuous stress score is derived directly from the emotion output probabilities. The weights are defined as:
+* fear: 1.0
+* angry: 0.7
+* sad: 0.6
+* disgust: 0.4
+* surprise: 0.2
+* happy: 0.0
+* neutral: 0.0
+During inference, a softmax function converts logits to probabilities, and the dot product of the probabilities and these weights generates a continuous stress index between 0.0 and 1.0.
+
+### 5.4 Training Pipeline
+1. Dataset Staging: FER-2013 is copied to the local Colab disk (`/content/fer2013`).
+2. Pooling & Splitting: Pools training and testing folders, splitting them 75/25 into a train/val pool and a held-out test split.
+3. K-Fold Cross Validation: Trains using 3-Fold Stratified Cross-Validation on the 75% pool.
+4. Batch Balancing: Data loaders use a `WeightedRandomSampler` to ensure every batch contains a balanced representation of the 7 classes. Plain Cross-Entropy Loss with a label smoothing factor of 0.1 is used.
+5. Checkpoint Selection: Validation checks validation accuracy (`val_acc`). Early stopping patience is 10 epochs.
+6. **Final Fit (Refit)**: Once CV metrics are logged, the script trains a final model on the entire 75% train/val pool (holding back 10% for early stopping monitoring) to maximize dataset size.
+7. Output: Checkpoint containing the model weights, stress mapping, normalizations, and class names is exported to `emotion_fer_best.pt`.
+
+---
+
+6. DOMAIN 05: AUDIO EVENT DETECTION (LOG-MEL CNN)
+-------------------------------------------------
+* Target File Name: `audio_event_cnn_best.pt` (or `audio_event_cnn_best_macrof1.pt`)
+* Purpose: Multi-class sound event classifier (cries and screams).
+* Replaces: DSP-based pitch, frequency, and RMS loudness threshold heuristics.
+
+### 6.1 Datasets & Classes
+1. ESC-50 (Primary): Comprises 2,000 environmental audio recordings. Crying baby clips are extracted as positive samples (`baby_cry`). All other environmental classes (e.g., dogs, vacuum cleaners, sirens, static, television) are assigned to the negative class (`other`). Negatives are capped at `MAX_OTHER = 800` to prevent class imbalance.
+2. Donateacry Corpus: Used to provide additional crying baby `.wav` recordings.
+3. Scream Dataset (Optional): Dropping adult scream `.wav`/`.mp3` recordings into `SCREAM_ROOT` automatically registers a `scream` class.
+
+### 6.2 Preprocessing & Feature Extraction
+To run efficiently on CPU at inference, audio is converted into log-mel spectrograms:
+1. Resampling: Audio files are resampled to `SR = 16000` Hz and mixed down to mono.
+2. Temporal Padding: Audio is padded or truncated to exactly `DURATION = 4.0` seconds (64,000 audio samples).
+3. Spectrogram Conversion: Computes Mel-spectrogram features using:
+   * FFT Window Size (`N_FFT`): 1024
+   * Hop Length (`HOP`): 512
+   * Mel Filterbanks (`N_MELS`): 64
+4. Amplitude Conversion: Converted to decibels (`power_to_db` with `ref=np.max`).
+5. Per-Clip Normalization: Normalized using z-score:
+     m_norm = (m - mean) / (std + 1e-6)
+   This results in an input shape of `[1, 64, 126]`.
+6. Augmentation (SpecAugment):
+   * Frequency Masking: 50% probability to set a block of up to 8 frequency channels to 0.
+   * Time Masking: 50% probability to set a block of up to 16 time frames to 0.
+
+### 6.3 Network Architecture (`AudioCNN`)
+A compact 2D Convolutional Neural Network designed for CPU execution:
+1. Convolutional Blocks: 4 stacked blocks. Each block is:
+   * Conv2D (3x3 kernel, padding=1)
+   * Batch Normalization (2D)
+   * ReLU activation
+   * Max Pooling (2x2 kernel)
+2. Channel Dimensions: 1 -> 32 -> 64 -> 128 -> 128.
+3. Classification Head: `nn.AdaptiveAvgPool2d(1)` pools features, followed by a flattening layer, a dropout layer (`nn.Dropout(0.3)`), and a linear layer (`nn.Linear(128, num_classes)`).
+
+### 6.4 Training Pipelines
+Supports two selection algorithms:
+
+#### A. Standard Pipeline (Validation Loss Selector)
+* Validation: 5-Fold Stratified Cross-Validation on the 75% train/val pool.
+* Loader: Uses `WeightedRandomSampler` and weighted Cross-Entropy Loss to handle class imbalance.
+* Optimizer: AdamW, Cosine Annealing, Max Epochs = 60, Early Stopping patience = 8 epochs (based on lowest validation loss). Saves to `audio_event_cnn_best.pt`.
+
+#### B. Macro-F1 Add-on Pipeline (`audio_events_macrof1_cells.py`)
+* Mechanism: The add-on pipeline evaluates validation checkpoints using Macro-F1 score across the alert classes (`baby_cry`, `scream`).
+* Output: Saved separately to `audio_event_cnn_best_macrof1.pt`.
+
+---
+
+7. INTEGRATION AND INFERENCE SWAP SPECIFICATION
+------------------------------------------------
+Once training is complete, the best-performing checkpoints are downloaded to the local directory `models/weights/`. The integration process is structured as follows:
+
+```mermaid
+graph TD
+    subgraph "Input Processing"
+        V_Stream[Video Stream] --> Frame_Sampler[Adaptive Frame Sampler]
+        A_Stream[Audio Stream] --> Mel_Gen[Log-Mel Feature Generator]
+    end
+
+    subgraph "Skeletal Pipeline"
+        Frame_Sampler --> YOLO_Pose[YOLO11s-Pose]
+        YOLO_Pose --> Pose_Norm[Scale Normalizer]
+    end
+
+    subgraph "Inference Execution"
+        Pose_Norm --> Violence_STGCN[Violence STGCN]
+        Pose_Norm --> Action_STGCN[Action STGCN]
+        Frame_Sampler --> Weapon_YOLO[Weapon YOLO11n]
+        Frame_Sampler --> Face_Pipeline[Face Recognition & Crop]
+        Face_Pipeline --> Emotion_CNN[Emotion/Stress CNN]
+        Mel_Gen --> Audio_CNN[Audio Event CNN]
+    end
+
+    subgraph "Multi-Modal Decision Fusion"
+        Violence_STGCN --> Fusion_Engine[AV Fusion Engine]
+        Action_STGCN --> Fusion_Engine
+        Weapon_YOLO --> Fusion_Engine
+        Emotion_CNN --> Fusion_Engine
+        Audio_CNN --> Fusion_Engine
+    end
+
+    subgraph "Alerting Stage"
+        Fusion_Engine --> Narrative_Gen[Video Description & LLM Prompt]
+    end
+```
+
+### 7.1 Stage Integration Parameters
+Each fine-tuned checkpoint carries its own metadata dictionary (e.g., class names, norm configs, channel dimensions). The runtime scripts load these configs dynamically to ensure alignment between training and inference:
+
+#### 1. Violence Detector Swap
+* Configuration: In `config.yaml`, update `models.violence` to point to `models/weights/violence_stgcn_best.pt`.
+* Integration: `stages/indoor_action.py` already extracts skeletons using YOLO11-pose. The new stage `stages/violence_analysis.py` hooks into these keypoints, runs a rolling sliding window of size 32, and evaluates the ST-GCN. It replaces the previous heuristics.
+* Post-processing: Emits a `violence` event if output exceeds a confidence threshold (e.g., 0.60) and persists for 5 consecutive frames.
+
+#### 2. Home Action Detector Swap
+* Configuration: Point `models.indoor_action` to `models/weights/home_action_stgcn_best.pt` (or the `macrof1` model).
+* Integration: Evaluates the single-subject GCN for each tracked person ID in the frame.
+* Post-processing: If `falling_down` or `lying_on_the_floor` outputs exceed the threshold, it triggers an alert.
+
+#### 3. Weapon Detector Swap
+* Configuration:
+  ```yaml
+  models:
+    weapon:
+      detectors:
+        - name: weapon_finetuned
+          model_id: models/weights/weapon_yolo11n_best.pt
+          filename: ""
+          confidence: 0.45
+  ```
+* Integration: Swaps out the pre-trained weights in the YOLO stage.
+* Post-processing: The existing code in `stages/weapon_detection.py` filters results to only report `pistol` or `knife` labels, discarding lookalike labels (`smartphone`, `wallet`, `banknote`, `card`) used during training.
+
+#### 4. Emotion Detector Swap
+* Configuration: Update the emotion model path to `models/weights/emotion_fer_best.pt`.
+* Integration: Replaces the DeepFace dependency. The face pipeline crops detected faces, downsamples them to 160x160 pixels, replicates channels, normalizes, and passes them to the timm CNN.
+* Post-processing: Returns 7 emotion probabilities. Calculates the stress index using the weight vector embedded in the checkpoint config.
+
+#### 5. Audio Event Detector Swap
+* Configuration: Update the audio model path to `models/weights/audio_event_cnn_best.pt`.
+* Integration: Replaces the DSP pitch/RMS heuristics. A sliding 4.0-second window generates log-mel features and processes them using `AudioCNN`.
+* Post-processing: Evaluates output probabilities for `baby_cry` and `scream` against threshold values (e.g., 0.50) before sending alerts.

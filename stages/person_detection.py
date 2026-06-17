@@ -7,7 +7,7 @@ class PersonDetector:
         self.config = config['models']['person']
         self.device_config = config['hardware']['device']
         
-        # Load YOLO into VRAM
+        
         self.model = model_manager.load_torch_model(
             'yolo_person', 
             lambda: YOLO(self.config['model'])
@@ -15,18 +15,25 @@ class PersonDetector:
         self.tracker = sv.ByteTrack()
         self.unique_track_ids = set()
 
+    def _get_optimal_imgsz(self, frame):
+        h, w = frame.shape[:2]
+        max_dim = max(h, w)
+        imgsz = max(320, min(640, int(round(max_dim / 32) * 32)))
+        return imgsz
+
     def process_frames(self, frames):
         """Processes a list of frames and assigns persistent track IDs."""
         results = []
         
         for frame_idx, frame_data in enumerate(frames):
-            # frame_data can be a frame numpy array or a dict from adaptive sampling
+            
             frame = frame_data['frame'] if isinstance(frame_data, dict) else frame_data
             
-            # YOLO Inference
-            yolo_result = self.model(frame, classes=self.config['classes'], conf=self.config['confidence'], verbose=False)[0]
             
-            # Convert to supervision format for tracking
+            imgsz = self._get_optimal_imgsz(frame)
+            yolo_result = self.model(frame, imgsz=imgsz, classes=self.config['classes'], conf=self.config['confidence'], verbose=False)[0]
+            
+            
             detections = sv.Detections.from_ultralytics(yolo_result)
             tracked_detections = self.tracker.update_with_detections(detections)
             

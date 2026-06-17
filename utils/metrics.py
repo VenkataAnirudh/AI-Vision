@@ -7,7 +7,7 @@ class TemporalSmoother:
         Manages rolling average smoothing for scores linked to tracking IDs.
         """
         self.window_size = window_size
-        self.history = {}  # track_id -> dict of deques
+        self.history = {}  
 
     def smooth(self, track_id, metric_name, value):
         """

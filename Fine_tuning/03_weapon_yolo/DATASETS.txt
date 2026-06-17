@@ -1,0 +1,40 @@
+==============================================================
+ 03 - WEAPON (YOLO11n)   ->   weapon_yolo11n_best.pt
+==============================================================
+Firearm/knife detector. The Sohas set deliberately includes LOOKALIKE
+classes (phone, wallet, banknote, card) - learning those is what kills
+the benign "phone -> gun" false alarm. Download INTO this folder, then
+upload the whole Fine_tuning folder to MyDrive/VisionAI/.
+
+--------------------------------------------------------------
+1) Sohas weapons  (PRIMARY - lookalike-rich, via Roboflow)
+--------------------------------------------------------------
+Roboflow needs a free account + a per-download key (one click):
+  a. Open: https://universe.roboflow.com/aditikulkarni-1710-gmail-com/sohas-weapon-detection
+  b. Download Dataset -> Format: YOLOv11 -> "Show download code" -> copy the URL+key.
+  c. Run (paste your URL in place of the example):
+     curl.exe -L "https://universe.roboflow.com/ds/XXXXXX?key=YOUR_KEY" -o "D:\Coding\Vision AI\Fine_tuning\03_weapon_yolo\sohas.zip"
+     Expand-Archive "D:\Coding\Vision AI\Fine_tuning\03_weapon_yolo\sohas.zip" -DestinationPath "D:\Coding\Vision AI\Fine_tuning\03_weapon_yolo\sohas"
+
+--------------------------------------------------------------
+1b) NO-key fallback  (Kaggle, YOLO format)
+--------------------------------------------------------------
+  kaggle datasets download -d snehilsanyal/weapon-detection-test -p "D:\Coding\Vision AI\Fine_tuning\03_weapon_yolo\sohas" --unzip
+  (Fewer lookalikes, but the notebook's class filtering + home negatives still work.)
+
+  Need this final layout (the export ships data.yaml):
+    03_weapon_yolo\sohas\data.yaml
+    03_weapon_yolo\sohas\train\images , train\labels
+    03_weapon_yolo\sohas\valid\images , valid\labels   (or val\)
+  The notebook auto-fixes the paths inside data.yaml, so don't worry about them.
+
+--------------------------------------------------------------
+2) HOME negative FRAMES  (OPTIONAL - extra FP cut)
+--------------------------------------------------------------
+Benign home stills (.jpg/.png), NO labels -> added as background images:
+    03_weapon_yolo\home_negatives_frames\*.jpg
+(Grab frames of your own rooms holding phones/remotes/wallets.)
+
+NOTES
+- MODEL = yolo11n (smallest, 4GB-friendly). The app already maps class names to
+  firearm/knife and drops the lookalikes, so no code change - just a config swap.

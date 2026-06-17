@@ -1,0 +1,43 @@
+==============================================================
+ 02 - HOME ACTION (ST-GCN)   ->   home_action_stgcn_best.pt
+==============================================================
+Multi-class indoor actions over skeletons. Classes auto-discovered
+from folder names ("falling down" -> falling_down). Download INTO this
+folder, then upload the whole Fine_tuning folder to MyDrive/VisionAI/.
+
+10 canonical classes (full set):
+  falling_down, lying_on_the_floor, sitting_down, standing_up, walking,
+  watching_tv, no_action, cleaning, eating, blowing_nose_or_sneezing
+Alert classes: falling_down, lying_on_the_floor.
+
+--------------------------------------------------------------
+1) IndoorActionDataset  (PRIMARY - full 10-class video set)
+--------------------------------------------------------------
+  curl.exe -L -o "D:\Coding\Vision AI\Fine_tuning\02_home_action_stgcn\IndoorActionDataset-video.zip" "https://atcdatos.ugr.es/index.php/s/zqPA9ajR78Bn6qB/download"
+  Expand-Archive "D:\Coding\Vision AI\Fine_tuning\02_home_action_stgcn\IndoorActionDataset-video.zip" -DestinationPath "D:\Coding\Vision AI\Fine_tuning\02_home_action_stgcn"
+
+  Need this final layout (one subfolder per class, spaces OK):
+    02_home_action_stgcn\IndoorActionDataset-video\train\<class>\*.mp4
+    02_home_action_stgcn\IndoorActionDataset-video\validation\<class>\*.mp4
+    02_home_action_stgcn\IndoorActionDataset-video\test\<class>\*.mp4
+
+  Fallback (7-class copy already on disk) if the link is slow:
+    Copy "D:\Coding\Vision AI\IndoorActionDataset-video" into this folder instead.
+
+--------------------------------------------------------------
+2) EXTRA fall data  (RECOMMENDED - falls are the weakest class)
+--------------------------------------------------------------
+Put clips into folders NAMED to match the class so they merge in:
+  02_home_action_stgcn\home_action_extra\falling down\*.mp4
+  02_home_action_stgcn\home_action_extra\lying on the floor\*.mp4
+
+Sources (use only indoor/home sequences, one action per clip):
+  - UP-Fall (Kaggle):
+      kaggle datasets download -d ticup/up-fall-detection-dataset -p "D:\Coding\Vision AI\Fine_tuning\02_home_action_stgcn\home_action_extra" --unzip
+  - URFD (direct):  http://fenix.ur.edu.pl/~mkepski/ds/uf.html  (Falls, RGB cam0)
+  - Le2i fall detection (search "Le2i fall detection dataset")
+
+NOTES
+- Names normalize automatically, so spaces vs underscores don't matter.
+- test/ is never used in training -> keep it for a clean final number.
+- Keep POSE_MODEL = yolo11s-pose (matches the app).

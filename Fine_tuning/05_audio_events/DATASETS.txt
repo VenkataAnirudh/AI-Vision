@@ -1,0 +1,37 @@
+==============================================================
+ 05 - AUDIO EVENTS (log-mel CNN)  ->  audio_event_cnn_best.pt
+==============================================================
+Cry/scream detector (replaces the DSP pitch/RMS heuristic). Classes
+auto-discovered from what you provide. Download INTO this folder, then
+upload the whole Fine_tuning folder to MyDrive/VisionAI/.
+
+Classes built automatically:
+  baby_cry  <- ESC-50 crying_baby + donate-a-cry
+  other     <- rest of ESC-50  (the negatives that stop false alarms)
+  scream    <- OPTIONAL, only if you fill SCREAM_ROOT
+
+--------------------------------------------------------------
+1) ESC-50  (PRIMARY - cry positives + varied negatives)
+--------------------------------------------------------------
+  git clone https://github.com/karolpiczak/ESC-50.git "D:\Coding\Vision AI\Fine_tuning\05_audio_events\ESC-50"
+
+  Gives:  05_audio_events\ESC-50\audio\*.wav  and  ESC-50\meta\esc50.csv
+
+--------------------------------------------------------------
+2) donate-a-cry corpus  (more baby-cry variety)
+--------------------------------------------------------------
+  git clone https://github.com/gveres/donateacry-corpus.git "D:\Coding\Vision AI\Fine_tuning\05_audio_events\donateacry-corpus"
+
+  (Any .wav found anywhere under this folder is used as baby_cry.)
+
+--------------------------------------------------------------
+3) SCREAM  (OPTIONAL - adds a 'scream' class)
+--------------------------------------------------------------
+Drop adult-scream .wav/.mp3 into:
+    05_audio_events\scream\*.wav
+Then set SCREAM_ROOT = BASE + "/scream" in the notebook CONFIG.
+(e.g. a Kaggle "human screaming detection" set, or trimmed clips.)
+
+NOTES
+- The front-end (sr/n_fft/hop/n_mels/duration) is saved in the checkpoint so the
+  app recomputes identical features. MAX_OTHER caps negatives for balance/speed.

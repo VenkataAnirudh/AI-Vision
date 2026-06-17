@@ -19,6 +19,26 @@ models/
 
 *.pt
 
-config.yaml
-run.bat
-requirements.txt
+# Local application/development files
+ffmpeg-gpu/
+AnamolyD/
+uploads/
+.claude/
+debug.txt
+*.log
+
+# Untracked development/test files
+_build_nb.py
+_vmae_test.py
+_weapon_test.py
+architecture.txt
+test_rtdetr.py
+Technical Assignment - Vision AI Engineer.pdf
+README.txt
+violence_training/
+
+
+
+
+
+

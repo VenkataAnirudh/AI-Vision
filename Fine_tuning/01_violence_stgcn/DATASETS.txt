@@ -1,0 +1,41 @@
+==============================================================
+ 01 - VIOLENCE (ST-GCN)   ->   violence_stgcn_best.pt
+==============================================================
+Binary violence / non_violence over skeletons. Home negatives are
+what stop false alarms. Download INTO this folder, then upload the
+whole Fine_tuning folder to  MyDrive/VisionAI/.
+
+ONE-TIME (Kaggle CLI):
+  pip install kaggle
+  mkdir "$env:USERPROFILE\.kaggle" -Force
+  Copy-Item "D:\Coding\Vision AI\AnamolyD\kaggle.json" "$env:USERPROFILE\.kaggle\kaggle.json" -Force
+
+--------------------------------------------------------------
+1) RLVS  (PRIMARY - 1000 violence + 1000 non-violence)
+--------------------------------------------------------------
+  kaggle datasets download -d mohamedmustafa/real-life-violence-situations-dataset -p "D:\Coding\Vision AI\Fine_tuning\01_violence_stgcn" --unzip
+  Rename-Item "D:\Coding\Vision AI\Fine_tuning\01_violence_stgcn\Real Life Violence Dataset" "RLVS"
+
+  Need this final layout:
+    01_violence_stgcn\RLVS\Violence\*.mp4
+    01_violence_stgcn\RLVS\NonViolence\*.mp4
+  (If unzip already made Violence/NonViolence at the top, just move them into a new RLVS\ folder.)
+
+--------------------------------------------------------------
+2) HOME negatives  (CRITICAL - your own benign indoor clips)
+--------------------------------------------------------------
+Cooking, playing, hugging, exercising, kids roughhousing, sports-on-TV,
+vacuuming, walking. ALL treated as non_violence. Just drop files in:
+    01_violence_stgcn\home_negatives\*.mp4   (subfolders fine)
+
+--------------------------------------------------------------
+3) RWF-2000  (OPTIONAL - best CCTV match, but request-only)
+--------------------------------------------------------------
+Not freely redistributable. Request from the authors if you want it:
+  https://github.com/mchengny/RWF2000-Video-Database-for-Violence-Detection
+Then put as  01_violence_stgcn\RWF-2000\{train,val}\{Fight,NonFight}\
+and set RWF2000_ROOT = BASE + "/RWF-2000" in the notebook CONFIG.
+
+NOTES
+- More VARIED home negatives = fewer deployment false alarms (matters more
+  than more fight clips). MAX_CLIPS_PER_CLASS caps each source for the 4h session.

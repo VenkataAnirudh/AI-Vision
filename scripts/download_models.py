@@ -20,12 +20,12 @@ def setup_directories():
 
 def download_yolo_models():
     print("\n[1/4] Fetching YOLO Models...")
-    # Core Person Detection Model
+    
     print("Downloading YOLOv8n...")
     YOLO("yolov8n.pt")
 
-    # Fire Detection Model placeholder/download
-    # Note: If you have a custom fire model, place it in models/weights/fire_yolov8s.pt
+    
+    
     print("Downloading YOLOv8s baseline for event detection...")
     YOLO("yolov8s.pt")
 

@@ -6,15 +6,30 @@ class ThreatScorer:
     def calculate_score(self, events_in_frame, emotion_result):
         score = 0.0
         
+        esc = self.weights.get('audio_escalation', {})
+
         # Base multiplier from distinct events
         for evt in events_in_frame:
             evt_type = evt.get('type', '')
-            if evt_type == 'fire/smoke':
+            if 'fire' in evt_type or 'smoke' in evt_type:
                 score = max(score, self.weights['fire_weight'])
+            elif 'weapon' in evt_type:
+                score = max(score, self.weights['weapon_weight'])
             elif evt_type == 'violence':
                 score = max(score, self.weights['violence_weight'])
+            elif evt_type == 'aggressive_guard':
+                score = max(score, self.weights['fight_weight'])
             elif evt_type in ('falling_down', 'lying_on_floor'):
                 score = max(score, self.weights['fall_weight'])
+            # Audio-driven RED escalation (burst of shouts, or shout fused with crowd/violence).
+            elif evt_type == 'loud_shout_panic':
+                score = max(score, esc.get('red_weight', 0.90))
+            elif evt_type in ('loud_shout_impact', 'raised_voice'):
+                score = max(score, self.weights.get('shout_weight', 0.45))
+            elif evt_type == 'audio_cry':
+                score = max(score, self.weights.get('cry_weight', 0.35))
+            elif evt_type == 'overcrowding':
+                score = max(score, self.weights.get('overcrowd_weight', 0.50))
                 
         # Factor in visual/audio heuristics
         if emotion_result:

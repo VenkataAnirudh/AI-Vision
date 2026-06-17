@@ -1,0 +1,265 @@
+# ─────────────────────────────────────────────────────
+# Hardware
+# ─────────────────────────────────────────────────────
+hardware:
+  device: cuda
+  fp16: true
+  batch_size: 16
+
+# ─────────────────────────────────────────────────────
+# Adaptive Frame Sampling
+# ─────────────────────────────────────────────────────
+sampling:
+  base_fps: 5
+  static_fps: 5                  # Baseline 5 FPS as requested (1 frame every 0.2s)
+  high_motion_fps: 10            # motion_score > 30.0 → Adaptive spike during alert scenes
+  static_threshold: 3.0
+  high_motion_threshold: 30.0
+
+  stage_fps:
+    person_detection: 5
+    face_pipeline: 5
+    emotion_analysis: 5
+    fire_detection: 5
+
+  temporal:                      # R3D-18 clips — triggered by motion
+    clip_fps: 12
+    clip_duration_seconds: 1.0
+    motion_trigger_threshold: 0.0
+    min_clip_gap_seconds: 2.0
+
+# ─────────────────────────────────────────────────────
+# Stages
+# ─────────────────────────────────────────────────────
+stages:
+  person_detection: true
+  face_pipeline: true
+  emotion_analysis: true
+  event_detection: true            # fire/smoke
+  weapon_detection: true           # YOLO firearm/knife detector (pose/proximity-gated escalator)
+  violence_detection: true         # fine-tuned skeleton ST-GCN (binary), runs alongside pose+fusion
+  indoor_action: true
+  audio_analysis: auto           # auto = ffprobe check at runtime
+  video_description: true
+
+# ─────────────────────────────────────────────────────
+# Models
+# ─────────────────────────────────────────────────────
+models:
+  weights_dir: ./models/weights
+  face_library_dir: ./models/face_library
+
+  person:
+    model: models/weights/rtdetr-l.pt
+    confidence: 0.40
+    iou: 0.45
+    classes: [0]                 # 0 = person in COCO
+
+  face:
+    model: buffalo_l
+    det_size: [960, 960]
+    det_thresh: 0.3              # lower than buffalo_l's 0.5 default → recovers small/low-res CCTV faces
+    cosine_threshold: 0.60       # below this → "Unknown"
+    library_path: ./models/face_library
+
+  emotion:
+    backend: fer_cnn             # fine-tuned timm efficientnet_b0 (replaces DeepFace)
+    model_path: "models/weights/Fine Tuned Weights/emotion_fer_best.pt"
+    min_face_size_px: 20         # lowered for low-res CCTV; small/blurry crops are quality-weighted
+
+  fire:
+    model: models/weights/firedetect-11s.pt
+    confidence: 0.68
+    temporal_frames_required: 3     # Fixed count; never FPS-scaled (see pipeline fix)
+    temporal_window_seconds: 4.0    # Extended from 2.0s — at 5 FPS gives 20 frames of room for 3 hits
+
+  weapon:
+    # YOLO weapon detector(s). Detector ids are swappable without code change.
+    # Add a second entry (e.g. a knife model) if one model can't cover both.
+    detectors:
+      - name: weapon_firearm
+        model_id: "models/weights/Fine Tuned Weights/best.pt"   # fine-tuned YOLO11n (local)
+        filename: weights/best.pt                      # ignored when model_id is a local path
+        confidence: 0.45                               # tune from probe output
+    min_persist_frames: 3        # temporal persistence (sampled frames) to confirm an alert
+    persist_window_seconds: 2.0  # frames within this window count toward persistence
+    strong_confidence: 0.60      # high-recall escalator: a single hit >= this flags even without persistence/person
+    proximity_pad_ratio: 0.15    # expand person bbox by this ratio for weapon association
+    raised_head_ratio: 0.12      # weapon center above (person_y1 + ratio*h) => "raised above head"
+
+  violence:
+    # Fine-tuned skeleton ST-GCN (binary non_violence/violence). The VideoMAE path is
+    # kept for fallback but `method: stgcn` selects the fine-tuned classifier.
+    method: stgcn
+    model_path: "models/weights/Fine Tuned Weights/violence_stgcn_best.pt"
+    pose_model_path: models/weights/yolo11x-pose.pt   # COCO-17, reused for skeletons
+    model_id: Nikeytas/videomae-crime-detector-production-v1   # VideoMAE fallback only
+    revision: main
+    num_frames: 32                   # ST-GCN clip length (sliding window over sampled_frames)
+    frame_size: 224
+    confidence_threshold: 0.65       # min softmax prob for the "violent" class
+    clip_stride: 8                   # sliding-window stride over sampled_frames
+    min_consecutive_clips: 2         # temporal voting for high-confidence alerts
+
+  indoor_action:
+    model_path: models/weights/yolo11x-pose.pt
+    dualhead_model_path: models/weights/indoor_action_dualhead_best.pt
+    stgcn_model_path: "models/weights/Fine Tuned Weights/home_action_stgcn_best_macrof1.pt"
+    stgcn_clip_frames: 32        # ST-GCN clip length (reuses model_path for pose)
+    confidence_threshold: 0.65
+    clip_frames: 16
+    frame_size: 112
+    classes:
+      - falling_down
+      - lying_on_floor
+      - no_action
+      - sitting_down
+      - standing_up
+      - walking
+      - watching_tv
+    alert_class_indices: [0, 1]  # falling_down, lying_on_floor
+
+  escalation:
+    fall_lying_window_seconds: 15.0
+    fall_lying_severity: CRITICAL
+
+  vlm:
+    mode: api                    # local | api
+    local:
+      model_id: vikhyatk/moondream2
+      revision: "2024-08-26"
+    api:
+      default_provider: openai   # openai | gemini  (overridable from UI)
+      openai:
+        model: gpt-4.1
+      gemini:
+        model: gemini-2.5-flash
+    key_frames_count: 5
+
+  audio:
+    sample_rate: 22050
+    window_seconds: 1.0
+    hop_seconds: 0.5
+    cry_freq_min_hz: 250          # widened band so real baby cries register (was 300)
+    cry_freq_max_hz: 700          # widened band (was 600)
+    cry_rms_threshold: 0.08
+    loud_event_rms_threshold: 0.15
+    raised_voice_threshold: 0.12
+    # Fine-tuned AudioCNN — only baby_cry is alerted (scream class dropped: no real scream
+    # training data). Runs ALONGSIDE the librosa heuristics.
+    model_path: "models/weights/Fine Tuned Weights/audio_event_cnn_best_macrof1.pt"
+    cnn_window_seconds: 4.0
+    cnn_hop_seconds: 2.0
+    cnn_confidence: 0.5
+
+# ─────────────────────────────────────────────────────
+# Threat Score Weights
+# ─────────────────────────────────────────────────────
+threat:
+  fire_weight: 1.00
+  weapon_weight: 0.90
+  fight_weight: 0.80
+  violence_weight: 0.85
+  fall_weight: 0.90
+  cry_weight: 0.35
+  stress_weight: 0.45
+  loitering_weight: 0.30
+  overcrowd_weight: 0.50
+  shout_weight: 0.45             # single loud shout / raised voice -> contributes (not RED alone)
+  # Audio-driven RED escalation rules (see pipeline._apply_audio_threat_escalation)
+  audio_escalation:
+    loud_shout_count_for_red: 3      # >= N distinct shout windows within the rolling window -> RED
+    loud_shout_window_seconds: 10.0  # rolling window for the shout-burst count
+    fusion_window_seconds: 3.0       # shout within this of proximity/overcrowd/violence -> RED
+    red_weight: 0.90                 # threat weight assigned to a 'loud_shout_panic' event
+  levels:
+    green:  [0.0, 0.30]
+    yellow: [0.30, 0.60]
+    orange: [0.60, 0.80]
+    red:    [0.80, 1.00]
+
+# ─────────────────────────────────────────────────────
+# Event Clip Extraction
+# ─────────────────────────────────────────────────────
+clips:
+  enabled: true
+  pre_event_seconds: 2.0
+  post_event_seconds: 5.0
+  min_event_gap_seconds: 3.0
+
+# ─────────────────────────────────────────────────────
+# Chapters
+# ─────────────────────────────────────────────────────
+chapters:
+  min_segment_seconds: 5
+
+# ─────────────────────────────────────────────────────
+# Output
+# ─────────────────────────────────────────────────────
+output:
+  base_dir: ./output
+  annotated_video: true
+  json_report: true
+  html_report: true
+  pdf_report: true
+  srt_subtitles: true
+  event_clips: true
+  chapters: true
+  anonymize_faces: false
+
+# ─────────────────────────────────────────────────────
+# Analytics (CPU-only post-processing — zero GPU load)
+# ─────────────────────────────────────────────────────
+analytics:
+  heatmap: true
+  trajectories: true
+  behavioral_scoring: true
+  crowd_analysis: true
+  loitering_detection: true
+  dwell_time: true
+
+# ─────────────────────────────────────────────────────
+# Loitering Detection
+# ─────────────────────────────────────────────────────
+loitering:
+  time_threshold_seconds: 15.0   # How long in one spot to flag
+  distance_threshold_px: 80.0    # Max centroid displacement to count as "staying"
+
+# ─────────────────────────────────────────────────────
+# Crowd Density
+# ─────────────────────────────────────────────────────
+crowd:
+  overcrowd_threshold: 10        # Number of persons to trigger overcrowd alert
+  density_levels:
+    sparse: [0, 2]
+    moderate: [3, 5]
+    dense: [6, 10]
+    overcrowded: [11, 9999]
+
+# ─────────────────────────────────────────────────────
+# API
+# ─────────────────────────────────────────────────────
+api:
+  host: 0.0.0.0
+  port: 8000
+  max_upload_mb: 500
+
+# ─────────────────────────────────────────────────────
+# Real-time
+# ─────────────────────────────────────────────────────
+realtime:
+  camera_id: 0
+  display_window: true
+  rolling_json_interval_seconds: 1
+  person_every_n_frames: 1
+  face_every_n_frames: 5
+  emotion_every_n_frames: 5
+  temporal_motion_threshold: 25
+
+# ─────────────────────────────────────────────────────
+# Logging
+# ─────────────────────────────────────────────────────
+logging:
+  level: INFO                    # DEBUG | INFO | WARNING | ERROR
+  console: true
+  file: true

@@ -6,9 +6,9 @@ class ModelManager:
     def __init__(self, device: str = 'cuda', fp16: bool = True):
         self.device = torch.device(device if torch.cuda.is_available() and device == 'cuda' else 'cpu')
         self.fp16 = fp16
-        self.loaded = {}  # name -> model
+        self.loaded = {}  
 
-    def load_torch_model(self, name: str, loader_fn: Callable, keep_previous: bool = False) -> Any:
+    def load_torch_model(self, name: str, loader_fn: Callable, keep_previous: bool = False, skip_fp16: bool = False) -> Any:
         """Load a model. Unload all others unless keep_previous=True."""
         if not keep_previous:
             self._unload_all_except(name)
@@ -17,12 +17,12 @@ class ModelManager:
             print(f"[ModelManager] Loading {name} into memory/VRAM (Device: {self.device})...")
             model = loader_fn()
             
-            # Send PyTorch model to device
+            
             if hasattr(model, 'to'):
                 model = model.to(self.device)
                 
-            # Cast to half precision (FP16) if running on CUDA and model supports it
-            if self.fp16 and self.device.type == 'cuda' and hasattr(model, 'half'):
+            
+            if self.fp16 and not skip_fp16 and self.device.type == 'cuda' and hasattr(model, 'half'):
                 try:
                     model = model.half()
                     print(f"[ModelManager] Cast {name} to FP16.")

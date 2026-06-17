@@ -8,7 +8,7 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 from torchvision.models.video import r3d_18
 
-# Mapping folder names to the target class list index
+
 CLASS_MAPPING = {
     "blowing nose or sneezing": 0,
     "cleaning": 1,
@@ -44,7 +44,7 @@ class VideoDataset(Dataset):
         self.samples = []
         self.labels = []
         
-        # Mean and Std for Kinetics-400 R3D-18 model normalization
+        
         self.mean = np.array([0.43216, 0.394666, 0.37645], dtype=np.float32)
         self.std = np.array([0.22803, 0.22145, 0.216989], dtype=np.float32)
 
@@ -56,7 +56,7 @@ class VideoDataset(Dataset):
 
             video_files = [f for f in os.listdir(class_path) if f.endswith(('.mp4', '.avi', '.mov'))]
             
-            # Limit samples in quick mode
+            
             if max_samples_per_class is not None:
                 video_files = video_files[:max_samples_per_class]
 
@@ -71,15 +71,15 @@ class VideoDataset(Dataset):
 
     def _augment_frame(self, frame):
         """Apply random augmentations to a single frame."""
-        # Random horizontal flip (50% chance)
+        
         if np.random.rand() > 0.5:
             frame = cv2.flip(frame, 1)
         
-        # Random brightness jitter (+/- 15%)
+        
         factor = 1.0 + np.random.uniform(-0.15, 0.15)
         frame = np.clip(frame * factor, 0, 255).astype(np.uint8)
         
-        # Random slight rotation (-10 to +10 degrees)
+        
         if np.random.rand() > 0.5:
             angle = np.random.uniform(-10, 10)
             h, w = frame.shape[:2]
@@ -95,7 +95,7 @@ class VideoDataset(Dataset):
         
         frames = []
         if total_frames >= self.clip_len:
-            # Sample indices evenly
+            
             frame_indices = set(np.linspace(0, total_frames - 1, self.clip_len, dtype=int))
             for f_idx in range(total_frames):
                 ret, frame = cap.read()
@@ -104,7 +104,7 @@ class VideoDataset(Dataset):
                 if f_idx in frame_indices:
                     frames.append(frame)
         else:
-            # Not enough frames, read all and pad
+            
             while True:
                 ret, frame = cap.read()
                 if not ret:
@@ -113,34 +113,34 @@ class VideoDataset(Dataset):
             cap.release()
             
             if len(frames) == 0:
-                # Fallback empty tensor
+                
                 frames = [np.zeros((self.frame_size, self.frame_size, 3), dtype=np.uint8) for _ in range(self.clip_len)]
             else:
                 while len(frames) < self.clip_len:
-                    frames.append(frames[-1].copy()) # Pad last frame
+                    frames.append(frames[-1].copy()) 
                     
         cap.release()
         
-        # Temporal augmentation: random temporal jitter (slight reordering of adjacent frames)
+        
         if self.augment and np.random.rand() > 0.7:
-            # Randomly skip or duplicate 1-2 frames
+            
             if len(frames) > self.clip_len:
                 start = np.random.randint(0, max(1, len(frames) - self.clip_len))
                 frames = frames[start:start + self.clip_len]
         
-        # Preprocess frames
+        
         processed_frames = []
         for frame in frames[:self.clip_len]:
             resized = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), (self.frame_size, self.frame_size))
             
-            # Apply spatial augmentations
+            
             if self.augment:
                 resized = self._augment_frame(resized)
             
             normalized = (resized.astype(np.float32) / 255.0 - self.mean) / self.std
             processed_frames.append(normalized)
 
-        # Tensor shape: [C, T, H, W]
+        
         clip_tensor = torch.from_numpy(np.stack(processed_frames)).permute(3, 0, 1, 2)
         return clip_tensor, label
 
@@ -148,11 +148,11 @@ class VideoDataset(Dataset):
 def compute_class_weights(labels, num_classes):
     """Compute inverse-frequency class weights for balanced training."""
     class_counts = np.bincount(labels, minlength=num_classes).astype(np.float32)
-    # Avoid division by zero
+    
     class_counts = np.maximum(class_counts, 1.0)
-    # Inverse frequency weighting
+    
     weights = 1.0 / class_counts
-    # Normalize so weights sum to num_classes
+    
     weights = weights / weights.sum() * num_classes
     return torch.tensor(weights, dtype=torch.float32)
 
@@ -161,7 +161,7 @@ def train_model(epochs=10, batch_size=4, lr=1e-4, quick=False):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[Train] Training on device: {device}")
 
-    # Load datasets (augmentation only on training set)
+    
     train_dir = "IndoorActionDataset-video/train"
     val_dir = "IndoorActionDataset-video/validation"
     
@@ -169,8 +169,8 @@ def train_model(epochs=10, batch_size=4, lr=1e-4, quick=False):
     train_dataset = VideoDataset(train_dir, max_samples_per_class=max_samples, augment=True)
     val_dataset = VideoDataset(val_dir, max_samples_per_class=max_samples, augment=False)
     
-    # Weighted sampling to address class imbalance
-    # (e.g., 'walking' has 158 samples vs 'falling down' with 34)
+    
+    
     sample_weights = compute_class_weights(
         np.array(train_dataset.labels), len(TARGET_CLASSES)
     )
@@ -184,11 +184,11 @@ def train_model(epochs=10, batch_size=4, lr=1e-4, quick=False):
     train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=sampler, num_workers=0)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
 
-    # Initialize R3D-18 model
+    
     print("[Train] Initializing R3D-18 model structure...")
     model = r3d_18(weights=None)
     
-    # Pre-cache/load standard kinetics weights if available
+    
     weights_path = "models/weights/r3d_18-b3b3357e.pth"
     if os.path.exists(weights_path):
         print(f"[Train] Loading pretrained Kinetics backbone from {weights_path}...")
@@ -197,35 +197,35 @@ def train_model(epochs=10, batch_size=4, lr=1e-4, quick=False):
         except Exception as e:
             print(f"[Train] Could not load local state dict: {e}. Starting fresh.")
     
-    # Freeze early layers (stem + layer1 + layer2) to preserve pretrained features
-    # Only fine-tune layer3, layer4, and the classification head
+    
+    
     for name, param in model.named_parameters():
         if name.startswith(('stem', 'layer1', 'layer2')):
             param.requires_grad = False
     
-    # Adjust classification head to 10 classes
+    
     model.fc = nn.Linear(model.fc.in_features, len(TARGET_CLASSES))
     model = model.to(device)
 
-    # Class-weighted cross-entropy loss
+    
     class_weights = compute_class_weights(
         np.array(train_dataset.labels), len(TARGET_CLASSES)
     ).to(device)
     criterion = nn.CrossEntropyLoss(weight=class_weights)
     
-    # Only optimize unfrozen parameters
+    
     trainable_params = [p for p in model.parameters() if p.requires_grad]
     optimizer = optim.AdamW(trainable_params, lr=lr, weight_decay=1e-4)
     
-    # Cosine annealing LR scheduler for smooth convergence
+    
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
 
-    # Mixed precision scaler for VRAM efficiency (4GB GTX 1650 Ti)
+    
     scaler = torch.amp.GradScaler('cuda') if device.type == 'cuda' else None
 
     best_val_acc = 0.0
     patience_counter = 0
-    early_stop_patience = 8  # Stop if no improvement for 8 epochs
+    early_stop_patience = 8  
     os.makedirs("models/weights", exist_ok=True)
     save_path = "models/weights/indoor_action_r3d18.pt"
 
@@ -245,7 +245,7 @@ def train_model(epochs=10, batch_size=4, lr=1e-4, quick=False):
             
             optimizer.zero_grad()
             
-            # Mixed precision forward pass
+            
             if scaler:
                 with torch.amp.autocast('cuda'):
                     outputs = model(inputs)
@@ -269,12 +269,12 @@ def train_model(epochs=10, batch_size=4, lr=1e-4, quick=False):
         current_lr = optimizer.param_groups[0]['lr']
         print(f"Epoch {epoch+1}/{epochs} - Train Loss: {epoch_loss:.4f} Acc: {epoch_acc:.4f} LR: {current_lr:.6f}")
 
-        # Validation phase
+        
         model.eval()
         val_loss = 0.0
         val_corrects = 0
         val_total = 0
-        # Per-class accuracy tracking
+        
         class_correct = np.zeros(len(TARGET_CLASSES))
         class_total = np.zeros(len(TARGET_CLASSES))
         
@@ -292,7 +292,7 @@ def train_model(epochs=10, batch_size=4, lr=1e-4, quick=False):
                 val_corrects += torch.sum(preds == labels.data)
                 val_total += labels.size(0)
                 
-                # Per-class tracking
+                
                 for i in range(labels.size(0)):
                     label_idx = labels[i].item()
                     class_total[label_idx] += 1
@@ -303,7 +303,7 @@ def train_model(epochs=10, batch_size=4, lr=1e-4, quick=False):
         v_acc = val_corrects.double() / val_total if val_total > 0 else 0
         print(f"Epoch {epoch+1}/{epochs} - Val Loss: {v_loss:.4f} Acc: {v_acc:.4f}")
         
-        # Print per-class accuracy every 5 epochs
+        
         if (epoch + 1) % 5 == 0 or epoch == epochs - 1:
             print("  Per-class accuracy:")
             for ci, cname in enumerate(TARGET_CLASSES):
@@ -311,10 +311,10 @@ def train_model(epochs=10, batch_size=4, lr=1e-4, quick=False):
                 ca = class_correct[ci] / ct if ct > 0 else 0.0
                 print(f"    {cname}: {ca:.2%} ({int(class_correct[ci])}/{int(ct)})")
 
-        # Step the LR scheduler
+        
         scheduler.step()
 
-        # Save checkpoint if best accuracy is achieved
+        
         if v_acc > best_val_acc:
             best_val_acc = v_acc
             patience_counter = 0
