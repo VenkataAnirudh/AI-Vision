@@ -15,16 +15,12 @@ To keep the environment clean and prevent package conflicts, you should set up a
 
 Open your terminal in the project folder and run:
 ```bash
-# 1. Create a virtual environment named 'venv'
 python -m venv venv
 
-# 2. Activate the virtual environment
-# On Windows:
 venv\Scripts\activate
-# On Mac/Linux:
+
 source venv/bin/activate
 
-# 3. Install all required dependencies
 pip install -r requirements.txt
 ```
 
